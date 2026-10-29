@@ -2,6 +2,7 @@
 name = "st-helper"
 version = "0.1.0"
 description = "Interview helper overlay"
+license = "MIT"
 edition = "2021"
 
 [build-dependencies]

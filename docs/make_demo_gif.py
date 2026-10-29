@@ -2,7 +2,6 @@
 import sys
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-OUT = sys.argv[1]
 W, H = 760, 428
 S = 2  # supersampling
 F = "C:/Windows/Fonts/"
@@ -110,30 +109,38 @@ A2 = ("- Сначала выясняю причину разногласий и 
       "- Свожу спор к фактам: требования, сроки, риски.\n"
       "- Предлагаю решение и фиксирую договорённости, чтобы не повторялось.")
 
-frames, durs = [], []
-def add(img, ms): frames.append(img); durs.append(ms)
+def scene_frames(scenes):
+    """[(question, answer)] -> (frames, durations_ms)"""
+    frames, durs = [], []
+    def add(img, ms): frames.append(img); durs.append(ms)
+    for q, a in scenes:
+        add(frame("listening", "", "", hint=True), 900)
+        for i in range(0, len(q) + 1, 3):  # recognized text appears
+            add(frame("transcribing", q[:i], "", hint=True), 45)
+        add(frame("transcribing", q, "", hint=True), 400)
+        add(frame("generating", q, ""), 300)
+        words = a.split(" ")
+        for i in range(1, len(words) + 1):
+            add(frame("generating", q, " ".join(words[:i]), fade_tail=8), 70)
+        add(frame("listening", q, a), 2600)
+    return frames, durs
 
-def scene(q, a):
-    add(frame("listening", "", "", hint=True), 900)
-    for i in range(0, len(q) + 1, 3):  # recognized text appears
-        add(frame("transcribing", q[:i], "", hint=True), 45)
-    add(frame("transcribing", q, "", hint=True), 400)
-    add(frame("generating", q, ""), 300)
-    words = a.split(" ")
-    for i in range(1, len(words) + 1):
-        add(frame("generating", q, " ".join(words[:i]), fade_tail=8), 70)
-    add(frame("listening", q, a), 2600)
 
-scene(Q1, A1)
-scene(Q2, A2)
-# One shared palette that is guaranteed to contain the small status-dot colors.
-sample = Image.new("RGB", (W, H * 2 + 40))
-sample.paste(frames[len(frames) // 4], (0, 0))
-sample.paste(frames[-1], (0, H))
-sd = ImageDraw.Draw(sample)
-for i, (col, _) in enumerate(STATES.values()):
-    sd.rectangle([i * 120, H * 2, i * 120 + 119, H * 2 + 39], fill=col)
-pal = sample.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
-frames = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
-frames[0].save(OUT, save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=True, disposal=1)
-print(len(frames), "frames")
+def save_gif(out, frames, durs, key_colors):
+    # One shared palette that is guaranteed to contain the small status-dot colors.
+    w, h = frames[0].size
+    sample = Image.new("RGB", (w, h * 2 + 40))
+    sample.paste(frames[len(frames) // 4], (0, 0))
+    sample.paste(frames[-1], (0, h))
+    sd = ImageDraw.Draw(sample)
+    for i, col in enumerate(key_colors):
+        sd.rectangle([i * 60, h * 2, i * 60 + 59, h * 2 + 39], fill=col)
+    pal = sample.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+    frames = [f.quantize(palette=pal, dither=Image.Dither.NONE) for f in frames]
+    frames[0].save(out, save_all=True, append_images=frames[1:], duration=durs, loop=0, optimize=True, disposal=1)
+    print(out, len(frames), "frames")
+
+
+if __name__ == "__main__":
+    frames, durs = scene_frames([(Q1, A1), (Q2, A2)])
+    save_gif(sys.argv[1], frames, durs, [c for c, _ in STATES.values()])
