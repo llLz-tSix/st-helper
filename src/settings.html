@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>ST Helper — настройки</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 16px 18px 70px; background: #15161b; color: #e8e9ee;
+      font: 13px "Segoe UI", system-ui, sans-serif; }
+    h2 { font-size: 13px; font-weight: 600; color: #9ea2b0; margin: 18px 0 8px;
+      text-transform: uppercase; letter-spacing: .04em; }
+    h2:first-child { margin-top: 0; }
+    label { display: block; margin: 8px 0 3px; color: #c3c6d1; }
+    input[type=text], input[type=password], input[type=number], select, textarea {
+      width: 100%; background: #1f2128; color: #f0f1f5; border: 1px solid #30333d;
+      border-radius: 6px; padding: 6px 8px; font: inherit; }
+    textarea { resize: vertical; min-height: 90px; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #4aa3ff; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; min-width: 0; }
+    .range { display: flex; align-items: center; gap: 8px; }
+    .range input[type=range] { flex: 1; }
+    .range output { width: 56px; text-align: right; color: #9ea2b0; font-variant-numeric: tabular-nums; }
+    .note { color: #7d8190; font-size: 12px; margin-top: 3px; }
+    .meter { position: relative; height: 8px; background: #23252d; border-radius: 4px; overflow: hidden; margin-top: 6px; }
+    .meter #lvl { height: 100%; width: 0; background: #3ecf6e; }
+    .meter #thr { position: absolute; top: 0; bottom: 0; width: 2px; background: #ff5c5c; }
+    .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .check input { margin: 0; }
+    footer { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 18px; background: #15161b;
+      border-top: 1px solid #262830; display: flex; gap: 10px; align-items: center; }
+    button { background: #2b2e38; color: #f0f1f5; border: 1px solid #3a3d48; border-radius: 6px;
+      padding: 7px 16px; font: inherit; cursor: pointer; }
+    button.primary { background: #2f6fd6; border-color: #2f6fd6; }
+    button:hover { filter: brightness(1.15); }
+    #msg { flex: 1; color: #9ea2b0; }
+    #msg.err { color: #ff8a8a; }
+    kbd { background: #23252d; border: 1px solid #353844; border-radius: 4px; padding: 0 5px; font: 12px Consolas, monospace; }
+    .keys { columns: 2; color: #b4b7c3; font-size: 12px; line-height: 1.9; }
+  </style>
+</head>
+<body>
+  <h2>Groq</h2>
+  <label for="key">API-ключ</label>
+  <input id="key" type="password" autocomplete="off" placeholder="gsk_…">
+  <div class="note" id="key-note"></div>
+  <div class="row">
+    <div>
+      <label for="model">Модель ответов</label>
+      <input id="model" type="text" list="models">
+      <datalist id="models">
+        <option value="openai/gpt-oss-120b">
+        <option value="openai/gpt-oss-20b">
+        <option value="qwen/qwen3.8-27b">
+      </datalist>
+    </div>
+    <div>
+      <label for="stt_language">Язык распознавания</label>
+      <select id="stt_language">
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+        <option value="uk">Українська</option>
+        <option value="de">Deutsch</option>
+        <option value="">Автоопределение</option>
+      </select>
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label for="answer_language">Язык ответа</label>
+      <input id="answer_language" type="text">
+    </div>
+    <div>
+      <label for="style">Стиль ответа</label>
+      <input id="style" type="text">
+    </div>
+  </div>
+
+  <h2>Кандидат и вакансия</h2>
+  <label for="resume">Резюме</label>
+  <textarea id="resume" rows="8" placeholder="Опыт, проекты, стек, достижения…"></textarea>
+  <label for="vacancy">Описание вакансии</label>
+  <textarea id="vacancy" rows="5"></textarea>
+
+  <h2>Звук</h2>
+  <label>Порог речи</label>
+  <div class="range"><input id="vad_threshold" type="range" min="0.002" max="0.1" step="0.001"><output id="vad_threshold_v"></output></div>
+  <div class="meter"><div id="lvl"></div><div id="thr"></div></div>
+  <div class="note">Зелёная полоса — текущий уровень системного звука, красная черта — порог. Речь собеседника должна заходить за черту, фон — нет.</div>
+  <label>Пауза, завершающая реплику</label>
+  <div class="range"><input id="pause_ms" type="range" min="500" max="3000" step="100"><output id="pause_ms_v"></output></div>
+  <div class="row">
+    <div>
+      <label for="min_utterance_ms">Мин. длина реплики, мс</label>
+      <input id="min_utterance_ms" type="number" min="200" max="5000" step="100">
+    </div>
+    <div>
+      <label for="max_utterance_s">Макс. длина реплики, с</label>
+      <input id="max_utterance_s" type="number" min="5" max="60">
+    </div>
+  </div>
+  <label class="check"><input id="use_mic" type="checkbox"> Также слушать микрофон (второй источник)</label>
+
+  <h2>Окно</h2>
+  <label>Непрозрачность фона</label>
+  <div class="range"><input id="opacity" type="range" min="0.2" max="1" step="0.05"><output id="opacity_v"></output></div>
+  <label>Размер шрифта ответа</label>
+  <div class="range"><input id="font_size" type="range" min="11" max="32" step="1"><output id="font_size_v"></output></div>
+
+  <h2>Горячие клавиши</h2>
+  <div class="keys">
+    <div><kbd>Ctrl+Shift+H</kbd> показать / скрыть</div>
+    <div><kbd>Ctrl+Shift+C</kbd> очистить ответ</div>
+    <div><kbd>Ctrl+Shift+↑/↓</kbd> прокрутка</div>
+    <div><kbd>Ctrl+Shift+P</kbd> пауза</div>
+    <div><kbd>Ctrl+Shift+M</kbd> сквозной режим</div>
+    <div><kbd>Ctrl+Shift+S</kbd> настройки</div>
+  </div>
+
+  <footer>
+    <span id="msg"></span>
+    <button id="close">Закрыть</button>
+    <button id="save" class="primary">Сохранить</button>
+  </footer>
+  <script src="settings.js"></script>
+</body>
+</html>

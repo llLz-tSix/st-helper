@@ -1,0 +1,80 @@
+:root {
+  --bg-alpha: 0.7;
+  --font: 17px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #f2f2f5;
+  user-select: none;
+}
+#app {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: rgba(16, 17, 22, var(--bg-alpha));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  overflow: hidden;
+}
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 6px 0 10px;
+  font-size: 12px;
+  color: #b9bbc6;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: move;
+  flex: none;
+}
+#dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7080; flex: none; }
+#dot.listening { background: #3ecf6e; }
+#dot.paused { background: #8a8f9c; }
+#dot.transcribing { background: #4aa3ff; }
+#dot.generating { background: #f0b429; }
+#dot.error { background: #ff5c5c; }
+#status { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#status.error { color: #ff8a8a; }
+#mode { color: #f0b429; }
+#bar button {
+  background: none; border: 0; color: #9a9dab; font-size: 12px;
+  width: 22px; height: 22px; border-radius: 4px; cursor: pointer; padding: 0;
+}
+#bar button:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+#question {
+  padding: 6px 12px 0;
+  font-size: calc(var(--font) * 0.72);
+  color: #9497a3;
+  flex: none;
+  max-height: 4.5em;
+  overflow: hidden;
+}
+#question:empty { display: none; }
+#answer {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 12px 14px;
+  font-size: var(--font);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  user-select: text;
+}
+#answer::-webkit-scrollbar { width: 6px; }
+#answer::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
+.hint { color: #6f7280; font-size: 0.8em; }
+.fade { animation: fade 0.25s ease-out; }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+#grip {
+  position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, rgba(255, 255, 255, 0.25) 50%);
+}
+body.passthrough #bar button, body.passthrough #grip { display: none; }

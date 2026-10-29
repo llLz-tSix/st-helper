@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ST Helper",
+  "version": "0.1.0",
+  "identifier": "com.sthelper.overlay",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "ST Helper",
+        "url": "index.html",
+        "width": 520,
+        "height": 300,
+        "minWidth": 260,
+        "minHeight": 120,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "resizable": true,
+        "focus": false,
+        "contentProtected": true
+      },
+      {
+        "label": "settings",
+        "title": "ST Helper — настройки",
+        "url": "settings.html",
+        "width": 580,
+        "height": 760,
+        "visible": false,
+        "center": true,
+        "alwaysOnTop": true,
+        "contentProtected": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ]
+  }
+}
