@@ -2,6 +2,11 @@ const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const win = window.__TAURI__.window.getCurrentWindow();
 
+const modifier = /Mac/.test(navigator.platform) ? "Cmd+Shift" : "Ctrl+Shift";
+for (const button of document.querySelectorAll("#bar button")) {
+  button.title = button.title.replace("Ctrl+Shift", modifier);
+}
+
 const $ = (id) => document.getElementById(id);
 const dot = $("dot"), statusEl = $("status"), modeEl = $("mode");
 const questionEl = $("question"), answerEl = $("answer");

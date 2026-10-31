@@ -24,7 +24,7 @@ pub async fn run(app: AppHandle, shared: Arc<Shared>, mut rx: UnboundedReceiver<
             (s.groq_key.clone(), s.stt_language.clone())
         };
         if key.is_empty() {
-            set_status(&app, &shared, "error", "Укажите ключ Groq в настройках (Ctrl+Shift+S)");
+            set_status(&app, &shared, "error", &crate::hotkeys::settings_hint());
             continue;
         }
         set_status(&app, &shared, "transcribing", "Распознаю…");

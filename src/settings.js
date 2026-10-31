@@ -3,6 +3,15 @@ const { listen } = window.__TAURI__.event;
 const win = window.__TAURI__.window.getCurrentWindow();
 
 const $ = (id) => document.getElementById(id);
+const modifier = /Mac/.test(navigator.platform) ? "Cmd+Shift" : "Ctrl+Shift";
+for (const key of document.querySelectorAll(".keys kbd")) {
+  key.textContent = key.textContent.replace("Ctrl+Shift", modifier);
+}
+if (/Mac/.test(navigator.platform)) {
+  $("mic-option").style.display = "none";
+  $("mac-audio-note").hidden = false;
+}
+
 const TEXT = ["model", "stt_language", "answer_language", "style", "resume", "vacancy"];
 const NUM = ["vad_threshold", "pause_ms", "min_utterance_ms", "max_utterance_s", "opacity", "font_size"];
 const FMT = {
@@ -62,7 +71,7 @@ $("save").onclick = save;
 $("close").onclick = () => win.hide();
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") win.hide();
-  if (e.key === "s" && e.ctrlKey && !e.shiftKey) { e.preventDefault(); save(); }
+  if (e.key === "s" && (e.ctrlKey || e.metaKey) && !e.shiftKey) { e.preventDefault(); save(); }
 });
 
 listen("settings-open", load);

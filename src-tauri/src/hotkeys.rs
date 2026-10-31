@@ -14,22 +14,69 @@ pub enum Action {
     OpenSettings,
 }
 
-pub fn bindings() -> Vec<(Shortcut, Action, &'static str)> {
-    let cs = Some(Modifiers::CONTROL | Modifiers::SHIFT);
+pub fn settings_hint() -> String {
+    format!("Укажите ключ Groq в настройках ({})", settings_shortcut())
+}
+
+#[cfg(target_os = "macos")]
+pub fn settings_shortcut() -> &'static str {
+    "Cmd+Shift+S"
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn settings_shortcut() -> &'static str {
+    "Ctrl+Shift+S"
+}
+
+pub fn bindings() -> Vec<(Shortcut, Action, String)> {
+    #[cfg(target_os = "macos")]
+    let (modifiers, modifier_label) = (Modifiers::SUPER | Modifiers::SHIFT, "Cmd+Shift");
+    #[cfg(not(target_os = "macos"))]
+    let (modifiers, modifier_label) = (Modifiers::CONTROL | Modifiers::SHIFT, "Ctrl+Shift");
+
+    let cs = Some(modifiers);
     vec![
-        (Shortcut::new(cs, Code::KeyH), Action::ToggleWindow, "Ctrl+Shift+H"),
-        (Shortcut::new(cs, Code::KeyC), Action::Clear, "Ctrl+Shift+C"),
-        (Shortcut::new(cs, Code::ArrowUp), Action::ScrollUp, "Ctrl+Shift+Up"),
-        (Shortcut::new(cs, Code::ArrowDown), Action::ScrollDown, "Ctrl+Shift+Down"),
-        (Shortcut::new(cs, Code::KeyP), Action::TogglePause, "Ctrl+Shift+P"),
-        (Shortcut::new(cs, Code::KeyM), Action::ToggleClickThrough, "Ctrl+Shift+M"),
-        (Shortcut::new(cs, Code::KeyS), Action::OpenSettings, "Ctrl+Shift+S"),
+        (
+            Shortcut::new(cs, Code::KeyH),
+            Action::ToggleWindow,
+            format!("{modifier_label}+H"),
+        ),
+        (
+            Shortcut::new(cs, Code::KeyC),
+            Action::Clear,
+            format!("{modifier_label}+C"),
+        ),
+        (
+            Shortcut::new(cs, Code::ArrowUp),
+            Action::ScrollUp,
+            format!("{modifier_label}+Up"),
+        ),
+        (
+            Shortcut::new(cs, Code::ArrowDown),
+            Action::ScrollDown,
+            format!("{modifier_label}+Down"),
+        ),
+        (
+            Shortcut::new(cs, Code::KeyP),
+            Action::TogglePause,
+            format!("{modifier_label}+P"),
+        ),
+        (
+            Shortcut::new(cs, Code::KeyM),
+            Action::ToggleClickThrough,
+            format!("{modifier_label}+M"),
+        ),
+        (
+            Shortcut::new(cs, Code::KeyS),
+            Action::OpenSettings,
+            format!("{modifier_label}+S"),
+        ),
     ]
 }
 
 /// Registers every hotkey; returns the labels of those that could not be registered
 /// (e.g. already taken by another program).
-pub fn init(app: &AppHandle) -> tauri::Result<Vec<&'static str>> {
+pub fn init(app: &AppHandle) -> tauri::Result<Vec<String>> {
     let binds = bindings();
     let handler_binds: Vec<(Shortcut, Action)> = binds.iter().map(|(s, a, _)| (*s, *a)).collect();
     app.plugin(

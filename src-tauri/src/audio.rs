@@ -1,4 +1,5 @@
-//! System-audio (WASAPI loopback) and optional microphone capture with a simple
+//! System-audio (WASAPI loopback on Windows; selected CoreAudio input on macOS)
+//! and optional microphone capture with a simple
 //! energy-based voice activity detector. Finished utterances (16 kHz mono i16)
 //! are sent to the transcription pipeline. Audio never touches the disk.
 
@@ -40,7 +41,11 @@ pub struct Utterance {
 }
 
 pub fn spawn(app: AppHandle, shared: Arc<Shared>, tx: UnboundedSender<Utterance>) {
-    for src in [Source::System, Source::Mic] {
+    #[cfg(target_os = "macos")]
+    let sources = [Source::System];
+    #[cfg(not(target_os = "macos"))]
+    let sources = [Source::System, Source::Mic];
+    for src in sources {
         let (app, shared, tx) = (app.clone(), shared.clone(), tx.clone());
         std::thread::Builder::new()
             .name(format!("audio-{}", src.name()))
@@ -59,7 +64,16 @@ fn wanted(src: Source, shared: &Shared) -> bool {
 fn default_device(src: Source) -> Option<(cpal::Device, String)> {
     let host = cpal::default_host();
     let dev = match src {
-        Source::System => host.default_output_device(),
+        Source::System => {
+            #[cfg(target_os = "macos")]
+            {
+                host.default_input_device()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                host.default_output_device()
+            }
+        }
         Source::Mic => host.default_input_device(),
     }?;
     let name = dev.name().unwrap_or_default();
@@ -85,7 +99,16 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: UnboundedS
         let Some((device, name)) = default_device(src) else {
             fail(
                 match src {
-                    Source::System => "Нет устройства вывода звука".into(),
+                    Source::System => {
+                        #[cfg(target_os = "macos")]
+                        {
+                            "Нет устройства ввода системного звука (настройте BlackHole или другой loopback-вход)".into()
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            "Нет устройства вывода звука".into()
+                        }
+                    }
                     Source::Mic => "Нет микрофона".into(),
                 },
                 &mut reported,
@@ -116,8 +139,8 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: UnboundedS
         loop {
             match data_rx.recv_timeout(Duration::from_millis(150)) {
                 Ok(buf) => proc.push(&buf, &ctx),
-                // WASAPI loopback delivers nothing while nothing plays: treat as silence
-                // so a pending utterance still gets finalized.
+                // Loopback devices may deliver nothing while nothing plays; treat it
+                // as silence so a pending utterance still gets finalized.
                 Err(mpsc::RecvTimeoutError::Timeout) => proc.push_silence(150, &ctx),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -146,9 +169,17 @@ fn build_stream(
     tx: mpsc::Sender<Vec<f32>>,
     failed: Arc<AtomicBool>,
 ) -> Result<(Stream, u32), String> {
-    // On WASAPI an input stream opened on a render device is a loopback stream.
     let cfg = match src {
-        Source::System => device.default_output_config(),
+        Source::System => {
+            #[cfg(target_os = "macos")]
+            {
+                device.default_input_config()
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                device.default_output_config()
+            }
+        }
         Source::Mic => device.default_input_config(),
     }
     .map_err(|e| e.to_string())?;

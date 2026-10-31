@@ -1,4 +1,7 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod audio;
 mod groq;
@@ -40,18 +43,18 @@ pub fn set_status(app: &AppHandle, shared: &Shared, state: &str, text: &str) {
 /// Status when nothing special is happening.
 pub fn base_status(app: &AppHandle, shared: &Shared) {
     let (state, text) = if shared.paused.load(Ordering::Relaxed) {
-        ("paused", "Пауза")
+        ("paused", "Пауза".to_string())
     } else if shared.settings.lock().unwrap().groq_key.is_empty() {
-        ("error", "Укажите ключ Groq в настройках (Ctrl+Shift+S)")
+        ("error", hotkeys::settings_hint())
     } else if shared.inflight.load(Ordering::SeqCst) > 0 {
-        ("generating", "Генерирую ответ…")
+        ("generating", "Генерирую ответ…".to_string())
     } else {
-        ("listening", "Слушаю")
+        ("listening", "Слушаю".to_string())
     };
-    set_status(app, shared, state, text);
+    set_status(app, shared, state, &text);
 }
 
-/// Hide the window from screen capture / recording (Windows 10 2004+).
+/// Ask the platform to exclude the window from screen capture when supported.
 fn protect(w: &WebviewWindow) {
     // Debug builds only: ST_HELPER_NO_PROTECT=1 lets you screenshot the UI.
     if cfg!(debug_assertions) && std::env::var_os("ST_HELPER_NO_PROTECT").is_some() {
@@ -134,7 +137,10 @@ fn get_state(shared: State<Arc<Shared>>) -> serde_json::Value {
         "opacity": s.opacity,
         "font_size": s.font_size,
         "click_through": shared.click_through.load(Ordering::Relaxed),
-        "hotkeys": hotkeys::bindings().iter().map(|b| b.2).collect::<Vec<_>>(),
+        "hotkeys": hotkeys::bindings()
+            .into_iter()
+            .map(|binding| binding.2)
+            .collect::<Vec<_>>(),
     })
 }
 
@@ -219,7 +225,7 @@ fn main() {
                 set_status(&handle, &shared, "error", &format!("Не удалось занять клавиши: {}", failed.join(", ")));
             }
             if shared.settings.lock().unwrap().groq_key.is_empty() {
-                set_status(&handle, &shared, "error", "Укажите ключ Groq в настройках (Ctrl+Shift+S)");
+                set_status(&handle, &shared, "error", &hotkeys::settings_hint());
             }
 
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

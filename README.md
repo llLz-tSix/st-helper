@@ -5,7 +5,7 @@
 <p>
   <a href="../../releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/llLz-tSix/st-helper?style=flat-square&color=2f6fd6&label=release"></a>
   <a href="../../releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/llLz-tSix/st-helper/total?style=flat-square&color=3ecf6e"></a>
-  <img alt="Windows 10/11" src="https://img.shields.io/badge/Windows-10%202004%2B%20%7C%2011-0078d4?style=flat-square&logo=windows11&logoColor=white">
+  <img alt="Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-0078d4?style=flat-square">
   <img alt="Tauri 2" src="https://img.shields.io/badge/Tauri-2-24c8d8?style=flat-square&logo=tauri&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-stable-b7410e?style=flat-square&logo=rust&logoColor=white">
   <img alt="Size" src="https://img.shields.io/badge/size-7%20MB-8a8f9c?style=flat-square">
@@ -13,7 +13,7 @@
 </p>
 
 **Слушает собеседника → распознаёт вопрос → за ~1,5 с показывает короткий ответ от первого лица.**<br>
-Полупрозрачное окно поверх звонка, которого не видно ни в демонстрации экрана, ни в записи.
+Полупрозрачное окно поверх звонка; защита от захвата зависит от платформы.
 
 [**⬇ Скачать**](../../releases/latest) · [Быстрый старт](#-быстрый-старт) · [Горячие клавиши](#%EF%B8%8F-горячие-клавиши) · [Как это работает](#-как-это-работает)
 
@@ -27,8 +27,8 @@
 
 | | |
 |---|---|
-| 🙈 **Невидимо для захвата** | `WDA_EXCLUDEFROMCAPTURE`: Windows вырезает окно из захвата экрана, записи и скриншотов |
-| 🎧 **Слушает звонок** | Системный звук через WASAPI loopback, любой мессенджер, без виртуальных кабелей |
+| 🙈 **Защита окна** | Windows исключает окно через `WDA_EXCLUDEFROMCAPTURE`; на macOS используется защита окна Tauri, доступность зависит от способа захвата |
+| 🎧 **Слушает звонок** | WASAPI loopback на Windows; на macOS — loopback-вход CoreAudio, например BlackHole |
 | ⚡ **Быстро** | Whisper `large-v3-turbo` + LLM на Groq, ответ стримится по словам ~1,5 с после конца вопроса |
 | 🧠 **Отвечает как вы** | Учитывает резюме и вакансию, не выдумывает опыт, по технике — сначала суть, потом пример |
 | 🎯 **Не болтает зря** | «Угу», «понятно», рассказ о компании — ответа не будет, только на вопросы |
@@ -42,8 +42,9 @@
 <img src="docs/img/privacy.gif" alt="Слева — ваш экран с подсказкой, справа — демонстрация экрана без окна" width="100%">
 </div>
 
-Окно подсказок и окно настроек помечены системным флагом исключения из захвата. Windows просто не отдаёт их
-пиксели программам записи и демонстрации: на чужой стороне видно то, что под окном.
+На Windows окна подсказок и настроек исключаются из захвата системным флагом `WDA_EXCLUDEFROMCAPTURE`.
+На macOS включается поддерживаемая Tauri защита содержимого окна, но поведение зависит от приложения для записи
+и версии macOS — проверьте его заранее.
 
 > [!NOTE]
 > Анимации выше нарисованы скриптом [`docs/make_assets.py`](docs/make_assets.py) по настоящему интерфейсу:
@@ -51,9 +52,11 @@
 
 ## 🚀 Быстрый старт
 
-1. **Скачайте** [`ST-Helper.exe`](../../releases/latest) (портативный, ~7 МБ) или установщик `ST-Helper_0.1.0_x64-setup.exe` (~1,8 МБ).
+1. **Windows:** скачайте [`ST-Helper.exe`](../../releases/latest) (портативный) или установщик.
+   **macOS:** соберите приложение по инструкции ниже; для захвата системного звука установите BlackHole 2ch,
+   задайте его входом по умолчанию и направьте звук системы в BlackHole (при необходимости через Multi-Output Device).
 2. **Получите ключ** на [console.groq.com](https://console.groq.com/keys) — бесплатно, по почте или Google.
-3. **Запустите**, нажмите `Ctrl+Shift+S`, вставьте ключ, по желанию резюме и описание вакансии → «Сохранить».
+3. **Запустите**, нажмите `Ctrl+Shift+S` (Windows) или `Cmd+Shift+S` (macOS), вставьте ключ, по желанию резюме и описание вакансии → «Сохранить».
 4. Включите любое видео с вопросами — окно покажет «Распознаю…», «Генерирую ответ…» и сам ответ.
 
 > [!TIP]
@@ -67,7 +70,8 @@
 <td width="46%"><img src="docs/img/settings.png" alt="Окно настроек"></td>
 <td>
 
-Хранятся локально:<br>`%APPDATA%\com.sthelper.overlay\settings.json`
+Хранятся локально: Windows — `%APPDATA%\com.sthelper.overlay\settings.json`;
+macOS — `~/Library/Application Support/com.sthelper.overlay/settings.json`.
 
 | Параметр | По умолчанию |
 |---|---|
@@ -81,7 +85,8 @@
 | Микрофон | выключен |
 
 Модель меняется на любую из [списка Groq](https://console.groq.com/docs/models).
-Микрофон — второй источник, например для очного собеседования рядом с ноутбуком.
+На Windows микрофон можно включить как второй источник. На macOS приложение слушает выбранный вход: для собеседника
+из звонка направьте системный звук в BlackHole; дополнительный микрофонный поток пока не поддерживается.
 
 Ключ лежит в файле открытым текстом, в репозиторий и интерфейс не попадает.
 
@@ -91,7 +96,8 @@
 
 ## ⌨️ Горячие клавиши
 
-Работают глобально, даже когда в фокусе звонок. Все заданы в одном месте — [`src-tauri/src/hotkeys.rs`](src-tauri/src/hotkeys.rs).
+Работают глобально, даже когда в фокусе звонок. На Windows используется `Ctrl+Shift`, на macOS — `Cmd+Shift`.
+Все заданы в одном месте — [`src-tauri/src/hotkeys.rs`](src-tauri/src/hotkeys.rs).
 
 | Клавиши | Действие |
 |---|---|
@@ -112,7 +118,7 @@
 
 ```mermaid
 flowchart LR
-    A["🔊 Системный звук<br/>WASAPI loopback"] --> B["16 кГц моно<br/>детектор речи"]
+    A["🔊 Системный звук<br/>WASAPI / CoreAudio loopback"] --> B["16 кГц моно<br/>детектор речи"]
     B -- "пауза 1.2 с" --> C["Groq Whisper<br/>large-v3-turbo"]
     C --> D{"Похоже<br/>на вопрос?"}
     D -- "«угу», «ок»" --> X["пропуск"]
@@ -121,8 +127,8 @@ flowchart LR
     E -- "текст по словам" --> F["🪟 Окно<br/>скрыто от захвата"]
 ```
 
-- **Звук.** `cpal` открывает input-поток на устройстве вывода по умолчанию — это loopback. Смена наушников/колонок
-  подхватывается автоматически. Энергетический детектор речи со сглаживанием: реплика заканчивается после паузы,
+- **Звук.** `cpal` использует WASAPI loopback на Windows. На macOS системное аудио нужно подать на выбранный вход
+  через BlackHole или другое loopback-устройство; смена входа подхватывается автоматически. Энергетический детектор речи со сглаживанием: реплика заканчивается после паузы,
   тишина и обрывки короче 0,7 с не отправляются, длинные монологи режутся на 25 с. Аудио на диск не пишется.
 - **Распознавание.** WAV собирается в памяти и уходит multipart-запросом. Сегменты, которые Whisper сам считает
   «не речью», и его типичные галлюцинации («Продолжение следует…») отбрасываются.
@@ -137,11 +143,16 @@ flowchart LR
 
 <br>
 
-Понадобятся:
+Для Windows понадобятся:
 - Node.js 18+
 - Rust stable, toolchain `x86_64-pc-windows-msvc` — [rustup.rs](https://rustup.rs)
 - Visual Studio Build Tools 2022 с «Desktop development with C++»
 - WebView2 Runtime (в Windows 11 уже есть)
+
+Для macOS понадобятся:
+- Node.js 18+
+- Rust stable — [rustup.rs](https://rustup.rs)
+- Xcode Command Line Tools (`xcode-select --install`)
 
 ```bash
 npm install
@@ -155,7 +166,8 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Результат: `src-tauri/target/release/st-helper.exe` и установщик в `src-tauri/target/release/bundle/nsis/`.
+Результат на Windows: `src-tauri/target/release/st-helper.exe` и установщик в `src-tauri/target/release/bundle/nsis/`.
+На macOS: `.app` в `src-tauri/target/release/bundle/macos/` и `.dmg` в `src-tauri/target/release/bundle/dmg/`.
 Кэш сборки Rust (`src-tauri/target`) занимает несколько гигабайт; после сборки его можно удалить командой
 `cargo clean --manifest-path src-tauri/Cargo.toml`.
 
@@ -186,9 +198,8 @@ src-tauri/src/
 
 <br>
 
-**Точно не видно в демонстрации?** Флаг работает на Windows 10 2004+ и 11 и действует на системные API захвата экрана,
-которыми пользуются программы для звонков и записи. Перед важным звонком проверьте один раз: начните демонстрацию
-экрана в своём мессенджере или запишите экран и посмотрите результат.
+**Точно не видно в демонстрации?** На Windows защита работает через системный флаг Windows 10 2004+ и 11. На macOS
+результат зависит от API захвата и приложения. Перед важным звонком проверьте демонстрацию экрана и запись.
 
 **Слышит мой голос?** По умолчанию нет — только системный звук (то, что слышите вы). Микрофон включается в настройках.
 
