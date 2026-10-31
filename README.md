@@ -168,6 +168,9 @@ npm run tauri build
 
 Результат на Windows: `src-tauri/target/release/st-helper.exe` и установщик в `src-tauri/target/release/bundle/nsis/`.
 На macOS: `.app` в `src-tauri/target/release/bundle/macos/` и `.dmg` в `src-tauri/target/release/bundle/dmg/`.
+GitHub Actions собирает Windows, macOS Apple Silicon и Intel при обновлении `main`; push тега `v*` дополнительно
+публикует GitHub Release с установщиками. macOS-сборки не подписаны Developer ID и не прошли нотариальную проверку
+Apple, поэтому Gatekeeper может попросить вручную подтвердить первый запуск.
 Кэш сборки Rust (`src-tauri/target`) занимает несколько гигабайт; после сборки его можно удалить командой
 `cargo clean --manifest-path src-tauri/Cargo.toml`.
 

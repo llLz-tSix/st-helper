@@ -7,14 +7,17 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::Sender;
 
 use crate::Shared;
 
 pub const RATE: u32 = 16_000;
+pub const UTTERANCE_QUEUE_CAPACITY: usize = 4;
+const AUDIO_BUFFER_CAPACITY: usize = 16;
 const FRAME: usize = 320; // 20 ms at 16 kHz
 const FRAME_MS: u32 = 20;
 const PREROLL_FRAMES: usize = 15; // 300 ms kept before speech onset
@@ -40,7 +43,7 @@ pub struct Utterance {
     pub pcm: Vec<i16>,
 }
 
-pub fn spawn(app: AppHandle, shared: Arc<Shared>, tx: UnboundedSender<Utterance>) {
+pub fn spawn(app: AppHandle, shared: Arc<Shared>, tx: Sender<Utterance>) {
     #[cfg(target_os = "macos")]
     let sources = [Source::System];
     #[cfg(not(target_os = "macos"))]
@@ -82,7 +85,7 @@ fn default_device(src: Source) -> Option<(cpal::Device, String)> {
 
 /// Keeps a capture stream open on the current default device, reopening it when the
 /// device changes or the stream reports an error.
-fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: UnboundedSender<Utterance>) {
+fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: Sender<Utterance>) {
     let mut reported = false;
     loop {
         if !wanted(src, &shared) {
@@ -115,9 +118,16 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: UnboundedS
             );
             continue;
         };
-        let (data_tx, data_rx) = mpsc::channel::<Vec<f32>>();
+        let (data_tx, data_rx) = mpsc::sync_channel::<Vec<f32>>(AUDIO_BUFFER_CAPACITY);
+        let dropped_chunks = Arc::new(AtomicUsize::new(0));
         let failed = Arc::new(AtomicBool::new(false));
-        let (stream, rate) = match build_stream(src, &device, data_tx, failed.clone()) {
+        let (stream, rate) = match build_stream(
+            src,
+            &device,
+            data_tx,
+            dropped_chunks.clone(),
+            failed.clone(),
+        ) {
             Ok(v) => v,
             Err(e) => {
                 fail(format!("Ошибка захвата звука: {e}"), &mut reported);
@@ -144,6 +154,10 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: UnboundedS
                 Err(mpsc::RecvTimeoutError::Timeout) => proc.push_silence(150, &ctx),
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
+            let dropped = dropped_chunks.swap(0, Ordering::Relaxed);
+            if dropped > 0 {
+                eprintln!("[audio] dropped {dropped} audio buffers because processing fell behind");
+            }
             if failed.load(Ordering::Relaxed) {
                 break;
             }
@@ -166,7 +180,8 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: UnboundedS
 fn build_stream(
     src: Source,
     device: &cpal::Device,
-    tx: mpsc::Sender<Vec<f32>>,
+    tx: mpsc::SyncSender<Vec<f32>>,
+    dropped_chunks: Arc<AtomicUsize>,
     failed: Arc<AtomicBool>,
 ) -> Result<(Stream, u32), String> {
     let cfg = match src {
@@ -187,12 +202,13 @@ fn build_stream(
     let channels = cfg.channels() as usize;
     let format = cfg.sample_format();
     let config: StreamConfig = cfg.into();
+    let callback_failed = failed.clone();
     let err_fn = move |_e: cpal::StreamError| failed.store(true, Ordering::Relaxed);
     let stream = match format {
-        SampleFormat::F32 => build::<f32>(device, &config, channels, tx, err_fn),
-        SampleFormat::I16 => build::<i16>(device, &config, channels, tx, err_fn),
-        SampleFormat::U16 => build::<u16>(device, &config, channels, tx, err_fn),
-        SampleFormat::I32 => build::<i32>(device, &config, channels, tx, err_fn),
+        SampleFormat::F32 => build::<f32>(device, &config, channels, tx, dropped_chunks, callback_failed, err_fn),
+        SampleFormat::I16 => build::<i16>(device, &config, channels, tx, dropped_chunks, callback_failed, err_fn),
+        SampleFormat::U16 => build::<u16>(device, &config, channels, tx, dropped_chunks, callback_failed, err_fn),
+        SampleFormat::I32 => build::<i32>(device, &config, channels, tx, dropped_chunks, callback_failed, err_fn),
         other => return Err(format!("формат {other:?} не поддерживается")),
     }
     .map_err(|e| e.to_string())?;
@@ -203,7 +219,9 @@ fn build<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     channels: usize,
-    tx: mpsc::Sender<Vec<f32>>,
+    tx: mpsc::SyncSender<Vec<f32>>,
+    dropped_chunks: Arc<AtomicUsize>,
+    failed: Arc<AtomicBool>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
 ) -> Result<Stream, cpal::BuildStreamError>
 where
@@ -218,7 +236,15 @@ where
                 .chunks(channels)
                 .map(|c| c.iter().map(|&s| s.to_sample::<f32>()).sum::<f32>() / c.len() as f32)
                 .collect();
-            let _ = tx.send(mono);
+            match tx.try_send(mono) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(_)) => {
+                    dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    failed.store(true, Ordering::Relaxed);
+                }
+            }
         },
         err_fn,
         None,
@@ -229,7 +255,7 @@ struct Ctx<'a> {
     src: Source,
     app: &'a AppHandle,
     shared: &'a Shared,
-    tx: &'a UnboundedSender<Utterance>,
+    tx: &'a Sender<Utterance>,
 }
 
 struct Processor {
@@ -395,6 +421,14 @@ impl Processor {
             .iter()
             .map(|x| ((x * gain).clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
             .collect();
-        let _ = ctx.tx.send(Utterance { pcm });
+        match ctx.tx.try_send(Utterance { pcm }) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                eprintln!("[audio] transcription queue is full; dropping utterance");
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                eprintln!("[audio] transcription pipeline is closed; dropping utterance");
+            }
+        }
     }
 }

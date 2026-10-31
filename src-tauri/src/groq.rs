@@ -178,3 +178,31 @@ pub async fn chat_stream(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::wav_bytes;
+
+    #[test]
+    fn wav_header_describes_mono_16khz_pcm() {
+        let wav = wav_bytes(&[0x1234, -2]);
+
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 40);
+        assert_eq!(&wav[8..16], b"WAVEfmt ");
+        assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 16_000);
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 4);
+        assert_eq!(&wav[44..], &[0x34, 0x12, 0xfe, 0xff]);
+    }
+
+    #[test]
+    fn empty_audio_still_has_a_valid_wav_header() {
+        let wav = wav_bytes(&[]);
+
+        assert_eq!(wav.len(), 44);
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 36);
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 0);
+    }
+}

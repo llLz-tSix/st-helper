@@ -4,7 +4,8 @@ use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::watch;
 
 use crate::audio::Utterance;
 use crate::settings::Settings;
@@ -14,7 +15,7 @@ const HISTORY_LEN: usize = 6;
 /// The model answers with this marker when the utterance needs no answer.
 const SKIP_MARK: &str = "NO_ANSWER";
 
-pub async fn run(app: AppHandle, shared: Arc<Shared>, mut rx: UnboundedReceiver<Utterance>) {
+pub async fn run(app: AppHandle, shared: Arc<Shared>, mut rx: Receiver<Utterance>) {
     while let Some(utt) = rx.recv().await {
         if shared.paused.load(Ordering::Relaxed) {
             continue;
@@ -58,7 +59,17 @@ pub async fn run(app: AppHandle, shared: Arc<Shared>, mut rx: UnboundedReceiver<
             continue;
         }
         let id = shared.gen_id.fetch_add(1, Ordering::SeqCst) + 1;
-        tauri::async_runtime::spawn(generate(app.clone(), shared.clone(), id, text));
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        shared.active_id.store(id, Ordering::SeqCst);
+        if let Some((_, previous)) = shared
+            .generation_cancel
+            .lock()
+            .unwrap()
+            .replace((id, cancel_tx))
+        {
+            let _ = previous.send(true);
+        }
+        tauri::async_runtime::spawn(generate(app.clone(), shared.clone(), id, text, cancel_rx));
     }
 }
 
@@ -70,7 +81,13 @@ fn push_history(shared: &Shared, role: &str, content: String) {
     }
 }
 
-async fn generate(app: AppHandle, shared: Arc<Shared>, id: u64, question: String) {
+async fn generate(
+    app: AppHandle,
+    shared: Arc<Shared>,
+    id: u64,
+    question: String,
+    mut cancel: watch::Receiver<bool>,
+) {
     shared.inflight.fetch_add(1, Ordering::SeqCst);
     set_status(&app, &shared, "generating", "Генерирую ответ…");
 
@@ -88,44 +105,54 @@ async fn generate(app: AppHandle, shared: Arc<Shared>, id: u64, question: String
     let mut gated = true;
     let mut answer = String::new();
     let mut preempted = false;
-    let res = crate::groq::chat_stream(&shared.http, &key, &model, messages, |delta| {
-        // A newer question (or a clear) took over: stop this one.
-        if shared.active_id.load(Ordering::SeqCst) > id {
+    let res = tokio::select! {
+        _ = cancel.changed() => {
             preempted = true;
-            return false;
+            Ok(())
         }
-        let out = if gated {
-            pending.push_str(delta);
-            let t = pending.trim_start();
-            if t.starts_with(SKIP_MARK) {
-                return false;
-            }
-            if SKIP_MARK.starts_with(t) {
-                return true; // could still turn into the marker
-            }
-            gated = false;
-            #[cfg(debug_assertions)]
-            eprintln!("[llm] first text after {} ms", t0.elapsed().as_millis());
-            // Claim the answer area; an earlier question can't override a later one.
-            if shared.active_id.fetch_max(id, Ordering::SeqCst) > id {
+        result = crate::groq::chat_stream(&shared.http, &key, &model, messages, |delta| {
+            // A newer question (or a clear) took over: stop this one.
+            if shared.active_id.load(Ordering::SeqCst) > id {
                 preempted = true;
                 return false;
             }
-            let _ = app.emit("question", json!({ "id": id, "text": question }));
-            t.to_string()
-        } else {
-            delta.to_string()
-        };
-        answer.push_str(&out);
-        let _ = app.emit("answer-delta", json!({ "id": id, "text": out }));
-        true
-    })
-    .await;
+            let out = if gated {
+                pending.push_str(delta);
+                let t = pending.trim_start();
+                if t.starts_with(SKIP_MARK) {
+                    return false;
+                }
+                if SKIP_MARK.starts_with(t) {
+                    return true; // could still turn into the marker
+                }
+                gated = false;
+                #[cfg(debug_assertions)]
+                eprintln!("[llm] first text after {} ms", t0.elapsed().as_millis());
+                if shared.active_id.load(Ordering::SeqCst) > id {
+                    preempted = true;
+                    return false;
+                }
+                let _ = app.emit("question", json!({ "id": id, "text": question }));
+                t.to_string()
+            } else {
+                delta.to_string()
+            };
+            answer.push_str(&out);
+            let _ = app.emit("answer-delta", json!({ "id": id, "text": out }));
+            true
+        }) => result,
+    };
 
     let _ = t0;
     #[cfg(debug_assertions)]
     eprintln!("[llm] done after {} ms, skipped={}, preempted={}", t0.elapsed().as_millis(), gated, preempted);
     shared.inflight.fetch_sub(1, Ordering::SeqCst);
+    {
+        let mut current = shared.generation_cancel.lock().unwrap();
+        if current.as_ref().is_some_and(|(current_id, _)| *current_id == id) {
+            current.take();
+        }
+    }
     match res {
         Err(e) if !preempted => set_status(&app, &shared, "error", &e.message()),
         _ => {
@@ -187,4 +214,28 @@ fn is_noise(t: &str) -> bool {
         "подписывайтесь на канал", "thanks for watching", "thank you for watching", "amara.org",
     ];
     l.chars().count() < 80 && HALLUCINATIONS.iter().any(|h| l.contains(h))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_noise, looks_like_question};
+
+    #[test]
+    fn recognizes_question_without_punctuation() {
+        assert!(looks_like_question("Расскажите о вашем опыте"));
+        assert!(looks_like_question("Tell me about your last project"));
+    }
+
+    #[test]
+    fn skips_short_acknowledgements() {
+        assert!(!looks_like_question("Угу"));
+        assert!(!looks_like_question("Sounds good"));
+    }
+
+    #[test]
+    fn filters_empty_and_known_transcription_noise() {
+        assert!(is_noise(""));
+        assert!(is_noise("Спасибо за просмотр"));
+        assert!(!is_noise("Как вы решаете конфликты?"));
+    }
 }

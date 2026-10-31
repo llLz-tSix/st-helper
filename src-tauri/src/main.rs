@@ -31,6 +31,7 @@ pub struct Shared {
     /// Id of the generation that owns the answer area; older ones stop.
     pub active_id: AtomicU64,
     pub inflight: AtomicUsize,
+    pub generation_cancel: Mutex<Option<(u64, tokio::sync::watch::Sender<bool>)>>,
     pub status: Mutex<(String, String)>,
     pub http: reqwest::Client,
 }
@@ -101,6 +102,9 @@ pub fn handle_action(app: &AppHandle, action: Action) {
         Action::Clear => {
             let n = shared.gen_id.fetch_add(1, Ordering::SeqCst) + 1;
             shared.active_id.fetch_max(n, Ordering::SeqCst);
+            if let Some((_, cancel)) = shared.generation_cancel.lock().unwrap().take() {
+                let _ = cancel.send(true);
+            }
             let _ = app.emit("clear", ());
         }
         Action::ScrollUp => {
@@ -196,6 +200,7 @@ fn main() {
                 gen_id: AtomicU64::new(0),
                 active_id: AtomicU64::new(0),
                 inflight: AtomicUsize::new(0),
+                generation_cancel: Mutex::new(None),
                 status: Mutex::new(("listening".into(), "Слушаю".into())),
                 http: groq::client(),
             });
@@ -228,7 +233,7 @@ fn main() {
                 set_status(&handle, &shared, "error", &hotkeys::settings_hint());
             }
 
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let (tx, rx) = tokio::sync::mpsc::channel(audio::UTTERANCE_QUEUE_CAPACITY);
             audio::spawn(handle.clone(), shared.clone(), tx);
             tauri::async_runtime::spawn(pipeline::run(handle, shared, rx));
             Ok(())
