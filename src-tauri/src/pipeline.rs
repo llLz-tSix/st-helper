@@ -4,19 +4,39 @@ use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc::Receiver;
+use tokio::sync::broadcast::{error::RecvError, Receiver};
 use tokio::sync::watch;
+use std::time::Duration;
 
 use crate::audio::Utterance;
 use crate::settings::Settings;
 use crate::{base_status, set_status, Shared};
 
 const HISTORY_LEN: usize = 6;
+const MAX_QUEUE_AGE: Duration = Duration::from_secs(10);
 /// The model answers with this marker when the utterance needs no answer.
 const SKIP_MARK: &str = "NO_ANSWER";
 
-pub async fn run(app: AppHandle, shared: Arc<Shared>, mut rx: Receiver<Utterance>) {
-    while let Some(utt) = rx.recv().await {
+// Retain FIFO order for fresh chunks, including forced cuts of long questions.
+async fn next_utterance(rx: &mut Receiver<Arc<Utterance>>) -> Option<Arc<Utterance>> {
+    loop {
+        let utt = match rx.recv().await {
+            Ok(utt) => utt,
+            Err(RecvError::Lagged(n)) => {
+                eprintln!("[pipeline] skipped {n} oldest queued utterances");
+                continue;
+            }
+            Err(RecvError::Closed) => return None,
+        };
+        if utt.queued_at.elapsed() > MAX_QUEUE_AGE {
+            continue;
+        }
+        return Some(utt);
+    }
+}
+
+pub async fn run(app: AppHandle, shared: Arc<Shared>, mut rx: Receiver<Arc<Utterance>>) {
+    while let Some(utt) = next_utterance(&mut rx).await {
         if shared.paused.load(Ordering::Relaxed) {
             continue;
         }
@@ -218,7 +238,32 @@ fn is_noise(t: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_noise, looks_like_question};
+    use super::{is_noise, looks_like_question, next_utterance, MAX_QUEUE_AGE};
+    use crate::audio::{Utterance, UTTERANCE_QUEUE_CAPACITY};
+    use std::{sync::Arc, time::Instant};
+
+    #[tokio::test]
+    async fn overloaded_queue_retains_newest_chunks_in_order() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(UTTERANCE_QUEUE_CAPACITY);
+        for i in 0..6 {
+            tx.send(Arc::new(Utterance { pcm: vec![i], queued_at: Instant::now() })).unwrap_or_else(|_| panic!("queue closed"));
+        }
+        drop(tx);
+        for i in 2..6 {
+            assert_eq!(next_utterance(&mut rx).await.unwrap().pcm, vec![i]);
+        }
+        assert!(next_utterance(&mut rx).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stale_audio_is_skipped_before_transcription() {
+        let (tx, mut rx) = tokio::sync::broadcast::channel(UTTERANCE_QUEUE_CAPACITY);
+        tx.send(Arc::new(Utterance { pcm: vec![1], queued_at: Instant::now() - MAX_QUEUE_AGE - std::time::Duration::from_secs(1) })).unwrap_or_else(|_| panic!("queue closed"));
+        tx.send(Arc::new(Utterance { pcm: vec![2], queued_at: Instant::now() })).unwrap_or_else(|_| panic!("queue closed"));
+        drop(tx);
+        assert_eq!(next_utterance(&mut rx).await.unwrap().pcm, vec![2]);
+        assert!(next_utterance(&mut rx).await.is_none());
+    }
 
     #[test]
     fn recognizes_question_without_punctuation() {

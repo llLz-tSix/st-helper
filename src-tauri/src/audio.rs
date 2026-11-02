@@ -11,13 +11,14 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::broadcast::Sender;
 
 use crate::Shared;
 
 pub const RATE: u32 = 16_000;
 pub const UTTERANCE_QUEUE_CAPACITY: usize = 4;
 const AUDIO_BUFFER_CAPACITY: usize = 16;
+const AUDIO_CHUNK_SAMPLES: usize = 1024;
 const FRAME: usize = 320; // 20 ms at 16 kHz
 const FRAME_MS: u32 = 20;
 const PREROLL_FRAMES: usize = 15; // 300 ms kept before speech onset
@@ -41,9 +42,33 @@ impl Source {
 
 pub struct Utterance {
     pub pcm: Vec<i16>,
+    pub queued_at: Instant,
 }
 
-pub fn spawn(app: AppHandle, shared: Arc<Shared>, tx: Sender<Utterance>) {
+// Inline storage keeps the capture callback free of heap allocations.
+struct AudioChunk {
+    samples: [f32; AUDIO_CHUNK_SAMPLES],
+    len: usize,
+}
+
+fn mono_chunks<T>(data: &[T], channels: usize) -> impl Iterator<Item = AudioChunk> + '_
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    let channels = channels.max(1);
+    data.chunks(AUDIO_CHUNK_SAMPLES * channels).map(move |input| {
+        let mut mono = AudioChunk { samples: [0.0; AUDIO_CHUNK_SAMPLES], len: 0 };
+        for c in input.chunks(channels) {
+            mono.samples[mono.len] =
+                c.iter().map(|&s| s.to_sample::<f32>()).sum::<f32>() / c.len() as f32;
+            mono.len += 1;
+        }
+        mono
+    })
+}
+
+pub fn spawn(app: AppHandle, shared: Arc<Shared>, tx: Sender<Arc<Utterance>>) {
     #[cfg(target_os = "macos")]
     let sources = [Source::System];
     #[cfg(not(target_os = "macos"))]
@@ -85,7 +110,7 @@ fn default_device(src: Source) -> Option<(cpal::Device, String)> {
 
 /// Keeps a capture stream open on the current default device, reopening it when the
 /// device changes or the stream reports an error.
-fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: Sender<Utterance>) {
+fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: Sender<Arc<Utterance>>) {
     let mut reported = false;
     loop {
         if !wanted(src, &shared) {
@@ -118,7 +143,7 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: Sender<Utt
             );
             continue;
         };
-        let (data_tx, data_rx) = mpsc::sync_channel::<Vec<f32>>(AUDIO_BUFFER_CAPACITY);
+        let (data_tx, data_rx) = mpsc::sync_channel::<AudioChunk>(AUDIO_BUFFER_CAPACITY);
         let dropped_chunks = Arc::new(AtomicUsize::new(0));
         let failed = Arc::new(AtomicBool::new(false));
         let (stream, rate) = match build_stream(
@@ -148,7 +173,7 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: Sender<Utt
         let ctx = Ctx { src, app: &app, shared: &shared, tx: &tx };
         loop {
             match data_rx.recv_timeout(Duration::from_millis(150)) {
-                Ok(buf) => proc.push(&buf, &ctx),
+                Ok(buf) => proc.push(&buf.samples[..buf.len], &ctx),
                 // Loopback devices may deliver nothing while nothing plays; treat it
                 // as silence so a pending utterance still gets finalized.
                 Err(mpsc::RecvTimeoutError::Timeout) => proc.push_silence(150, &ctx),
@@ -180,7 +205,7 @@ fn capture_loop(src: Source, app: AppHandle, shared: Arc<Shared>, tx: Sender<Utt
 fn build_stream(
     src: Source,
     device: &cpal::Device,
-    tx: mpsc::SyncSender<Vec<f32>>,
+    tx: mpsc::SyncSender<AudioChunk>,
     dropped_chunks: Arc<AtomicUsize>,
     failed: Arc<AtomicBool>,
 ) -> Result<(Stream, u32), String> {
@@ -219,7 +244,7 @@ fn build<T>(
     device: &cpal::Device,
     config: &StreamConfig,
     channels: usize,
-    tx: mpsc::SyncSender<Vec<f32>>,
+    tx: mpsc::SyncSender<AudioChunk>,
     dropped_chunks: Arc<AtomicUsize>,
     failed: Arc<AtomicBool>,
     err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
@@ -232,17 +257,16 @@ where
     device.build_input_stream(
         config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
-            let mono: Vec<f32> = data
-                .chunks(channels)
-                .map(|c| c.iter().map(|&s| s.to_sample::<f32>()).sum::<f32>() / c.len() as f32)
-                .collect();
-            match tx.try_send(mono) {
-                Ok(()) => {}
-                Err(mpsc::TrySendError::Full(_)) => {
-                    dropped_chunks.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    failed.store(true, Ordering::Relaxed);
+            for mono in mono_chunks(data, channels) {
+                match tx.try_send(mono) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        dropped_chunks.fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        failed.store(true, Ordering::Relaxed);
+                        break;
+                    }
                 }
             }
         },
@@ -255,7 +279,7 @@ struct Ctx<'a> {
     src: Source,
     app: &'a AppHandle,
     shared: &'a Shared,
-    tx: &'a Sender<Utterance>,
+    tx: &'a Sender<Arc<Utterance>>,
 }
 
 struct Processor {
@@ -264,12 +288,13 @@ struct Processor {
     phase: f64,
     acc: f32,
     cnt: u32,
-    frame: Vec<f32>,
+    frame: [f32; FRAME],
+    frame_len: usize,
     // VAD
     smooth: f32,
     onset: u32,
     in_speech: bool,
-    preroll: VecDeque<Vec<f32>>,
+    preroll: VecDeque<[f32; FRAME]>,
     buf: Vec<f32>,
     voiced_ms: u32,
     silence_ms: u32,
@@ -285,11 +310,12 @@ impl Processor {
             phase: 0.0,
             acc: 0.0,
             cnt: 0,
-            frame: Vec::with_capacity(FRAME),
+            frame: [0.0; FRAME],
+            frame_len: 0,
             smooth: 0.0,
             onset: 0,
             in_speech: false,
-            preroll: VecDeque::new(),
+            preroll: VecDeque::with_capacity(PREROLL_FRAMES),
             buf: Vec::new(),
             voiced_ms: 0,
             silence_ms: 0,
@@ -324,10 +350,11 @@ impl Processor {
     }
 
     fn push_sample(&mut self, v: f32, ctx: &Ctx) {
-        self.frame.push(v);
-        if self.frame.len() == FRAME {
-            let f = std::mem::replace(&mut self.frame, Vec::with_capacity(FRAME));
-            self.on_frame(f, ctx);
+        self.frame[self.frame_len] = v;
+        self.frame_len += 1;
+        if self.frame_len == FRAME {
+            self.frame_len = 0;
+            self.on_frame(self.frame, ctx);
         }
     }
 
@@ -340,7 +367,7 @@ impl Processor {
         self.silence_ms = 0;
     }
 
-    fn on_frame(&mut self, frame: Vec<f32>, ctx: &Ctx) {
+    fn on_frame(&mut self, frame: [f32; FRAME], ctx: &Ctx) {
         let rms = (frame.iter().map(|x| x * x).sum::<f32>() / frame.len() as f32).sqrt();
         // fast attack, slower release
         let k = if rms > self.smooth { 0.5 } else { 0.15 };
@@ -368,14 +395,15 @@ impl Processor {
         let voiced = self.smooth > thr;
 
         if !self.in_speech {
-            self.preroll.push_back(frame);
-            if self.preroll.len() > PREROLL_FRAMES {
+            if self.preroll.len() == PREROLL_FRAMES {
                 self.preroll.pop_front();
             }
+            self.preroll.push_back(frame);
             self.onset = if voiced { self.onset + 1 } else { 0 };
             if self.onset >= ONSET_FRAMES {
                 self.in_speech = true;
-                self.buf = self.preroll.drain(..).flatten().collect();
+                self.buf.clear();
+                self.buf.extend(self.preroll.drain(..).flatten());
                 self.voiced_ms = self.onset * FRAME_MS;
                 self.silence_ms = 0;
             }
@@ -421,14 +449,34 @@ impl Processor {
             .iter()
             .map(|x| ((x * gain).clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
             .collect();
-        match ctx.tx.try_send(Utterance { pcm }) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                eprintln!("[audio] transcription queue is full; dropping utterance");
-            }
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                eprintln!("[audio] transcription pipeline is closed; dropping utterance");
-            }
+        // A bounded broadcast channel evicts the oldest queued utterance on overflow.
+        if ctx.tx.send(Arc::new(Utterance { pcm, queued_at: Instant::now() })).is_err() {
+            eprintln!("[audio] transcription pipeline is closed; dropping utterance");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{mono_chunks, AUDIO_CHUNK_SAMPLES};
+
+    #[test]
+    fn stereo_downmix_preserves_order_across_chunk_boundary_and_partial_tail() {
+        let input: Vec<f32> = (0..AUDIO_CHUNK_SAMPLES + 3)
+            .flat_map(|i| [i as f32, i as f32 + 2.0])
+            .collect();
+        let chunks: Vec<_> = mono_chunks(&input, 2).collect();
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len, AUDIO_CHUNK_SAMPLES);
+        assert_eq!(chunks[1].len, 3);
+        let mono: Vec<_> = chunks.iter().flat_map(|c| c.samples[..c.len].iter().copied()).collect();
+        assert_eq!(mono, (0..AUDIO_CHUNK_SAMPLES + 3).map(|i| i as f32 + 1.0).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn integer_audio_is_normalized_and_empty_input_produces_no_chunks() {
+        let chunks: Vec<_> = mono_chunks(&[i16::MIN, 0, 16384], 1).collect();
+        assert_eq!(&chunks[0].samples[..chunks[0].len], &[-1.0, 0.0, 0.5]);
+        assert_eq!(mono_chunks::<f32>(&[], 2).count(), 0);
     }
 }

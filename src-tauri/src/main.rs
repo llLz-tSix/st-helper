@@ -21,6 +21,7 @@ use settings::Settings;
 
 pub struct Shared {
     pub settings: Mutex<Settings>,
+    pub settings_save: Mutex<()>,
     pub settings_path: PathBuf,
     pub paused: AtomicBool,
     pub click_through: AtomicBool,
@@ -157,16 +158,18 @@ fn save_settings(
     new_key: Option<String>,
     clear_key: Option<bool>,
 ) -> Result<(), String> {
-    let mut cur = shared.settings.lock().unwrap();
+    // Serialize saves without blocking audio readers during filesystem I/O.
+    let _save = shared.settings_save.lock().unwrap();
     settings.groq_key = match new_key.map(|k| k.trim().to_string()) {
         Some(k) if !k.is_empty() => k,
         _ if clear_key == Some(true) => String::new(),
-        _ => cur.groq_key.clone(),
+        _ => shared.settings.lock().unwrap().groq_key.clone(),
     };
     settings.sanitize();
     settings.save(&shared.settings_path)?;
-    *cur = settings;
-    let _ = app.emit("ui-settings", json!({ "opacity": cur.opacity, "font_size": cur.font_size }));
+    let ui = json!({ "opacity": settings.opacity, "font_size": settings.font_size });
+    *shared.settings.lock().unwrap() = settings;
+    let _ = app.emit("ui-settings", ui);
     Ok(())
 }
 
@@ -193,6 +196,7 @@ fn main() {
             let path = app.path().app_config_dir()?.join("settings.json");
             let shared = Arc::new(Shared {
                 settings: Mutex::new(Settings::load(&path)),
+                settings_save: Mutex::new(()),
                 settings_path: path,
                 paused: AtomicBool::new(false),
                 click_through: AtomicBool::new(false),
@@ -233,7 +237,7 @@ fn main() {
                 set_status(&handle, &shared, "error", &hotkeys::settings_hint());
             }
 
-            let (tx, rx) = tokio::sync::mpsc::channel(audio::UTTERANCE_QUEUE_CAPACITY);
+            let (tx, rx) = tokio::sync::broadcast::channel(audio::UTTERANCE_QUEUE_CAPACITY);
             audio::spawn(handle.clone(), shared.clone(), tx);
             tauri::async_runtime::spawn(pipeline::run(handle, shared, rx));
             Ok(())

@@ -11,6 +11,23 @@ const $ = (id) => document.getElementById(id);
 const dot = $("dot"), statusEl = $("status"), modeEl = $("mode");
 const questionEl = $("question"), answerEl = $("answer");
 let currentId = 0;
+let pendingText = "";
+let renderFrame = null;
+
+function resetPendingText() {
+  if (renderFrame !== null) cancelAnimationFrame(renderFrame);
+  renderFrame = null;
+  pendingText = "";
+}
+
+function flushText() {
+  renderFrame = null;
+  if (!pendingText) return;
+  const nearBottom = answerEl.scrollHeight - answerEl.scrollTop - answerEl.clientHeight < 30;
+  appendText(pendingText);
+  pendingText = "";
+  if (nearBottom) answerEl.scrollTop = answerEl.scrollHeight;
+}
 
 function setStatus({ state, text }) {
   dot.className = state;
@@ -42,6 +59,7 @@ listen("ui-settings", (e) => applyUi(e.payload));
 listen("click-through", (e) => setClickThrough(e.payload));
 
 listen("question", (e) => {
+  resetPendingText();
   currentId = e.payload.id;
   questionEl.textContent = e.payload.text;
   answerEl.textContent = "";
@@ -50,12 +68,12 @@ listen("question", (e) => {
 
 listen("answer-delta", (e) => {
   if (e.payload.id !== currentId) return;
-  const nearBottom = answerEl.scrollHeight - answerEl.scrollTop - answerEl.clientHeight < 30;
-  appendText(e.payload.text);
-  if (nearBottom) answerEl.scrollTop = answerEl.scrollHeight;
+  pendingText += e.payload.text;
+  if (renderFrame === null) renderFrame = requestAnimationFrame(flushText);
 });
 
 listen("clear", () => {
+  resetPendingText();
   currentId = -1;
   questionEl.textContent = "";
   answerEl.innerHTML = '<span class="hint">Ожидаю вопрос…</span>';
